@@ -59,13 +59,14 @@ const manifest = {
 const builder = new addonBuilder(manifest);
 
 // ---------------------------------------------------------------------------
-// Catalog
+// Catalog handler
 // ---------------------------------------------------------------------------
 
 builder.defineCatalogHandler(async ({ type, id, extra }) => {
   const page = Math.floor((parseInt(extra.skip) || 0) / 24) + 1;
   try {
     let items = [];
+
     if (extra.search) {
       items = await missav.search(extra.search, page);
     } else if (extra.genre && GENRE_SLUG[extra.genre]) {
@@ -81,6 +82,7 @@ builder.defineCatalogHandler(async ({ type, id, extra }) => {
     } else {
       items = await missav.getNewest(page);
     }
+
     return { metas: items.map(missav.toMeta) };
   } catch (e) {
     console.error('[catalog]', e.message);
@@ -89,7 +91,7 @@ builder.defineCatalogHandler(async ({ type, id, extra }) => {
 });
 
 // ---------------------------------------------------------------------------
-// Meta
+// Meta handler
 // ---------------------------------------------------------------------------
 
 builder.defineMetaHandler(async ({ type, id }) => {
@@ -100,12 +102,13 @@ builder.defineMetaHandler(async ({ type, id }) => {
     if (!data) return { meta: null };
     return { meta: missav.toMeta(data) };
   } catch (e) {
+    console.error('[meta]', e.message);
     return { meta: null };
   }
 });
 
 // ---------------------------------------------------------------------------
-// Stream
+// Stream handler
 // ---------------------------------------------------------------------------
 
 builder.defineStreamHandler(async ({ type, id }) => {
@@ -113,6 +116,7 @@ builder.defineStreamHandler(async ({ type, id }) => {
   try {
     const slug = id.replace('missav:', '');
     console.log('[stream] resolving', slug);
+
     const data = await missav.resolveStream(slug);
     if (!data || !data.best) {
       console.log('[stream] no stream for', slug);
@@ -120,6 +124,7 @@ builder.defineStreamHandler(async ({ type, id }) => {
     }
 
     const proxied = `${PUBLIC_URL}/proxy?url=${encodeURIComponent(data.best)}`;
+    console.log('[stream] ->', proxied);
 
     return {
       streams: [
@@ -153,10 +158,12 @@ const app = express();
 app.get('/health', (req, res) => res.send('ok'));
 app.get('/proxy', proxyHandler);
 
-// Mount Stremio addon vào cùng app
+// Mount Stremio addon router ở root — PHẢI ĐẶT CUỐI CÙNG
 app.use('/', getRouter(builder.getInterface()));
 
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`MissAV addon on port ${PORT}`);
+  console.log('---------------------------------------------');
+  console.log(`MissAV addon listening on port ${PORT}`);
   console.log(`Manifest: ${PUBLIC_URL}/manifest.json`);
+  console.log('---------------------------------------------');
 });
