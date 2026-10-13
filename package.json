@@ -9,12 +9,12 @@
   "dependencies": {
     "express": "^4.19.2",
     "stremio-addon-sdk": "^1.6.10",
-    "axios": "^1.6.0",
     "cheerio": "^1.0.0-rc.12",
-    "node-cache": "^5.1.2"
+    "node-cache": "^5.1.2",
+    "wreq-js": "^3.0.0"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=20"
   },
   "license": "MIT"
 }
