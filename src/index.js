@@ -9,10 +9,6 @@ const PORT = process.env.PORT || 7000;
 const PUBLIC_URL =
   process.env.PUBLIC_URL || `http://127.0.0.1:${PORT}`;
 
-// ---------------------------------------------------------------------------
-// Manifest
-// ---------------------------------------------------------------------------
-
 const GENRE_SLUG = {
   Uncensored: 'uncensored',
   Censored: 'censored',
@@ -58,10 +54,6 @@ const manifest = {
 
 const builder = new addonBuilder(manifest);
 
-// ---------------------------------------------------------------------------
-// Catalog handler
-// ---------------------------------------------------------------------------
-
 builder.defineCatalogHandler(async ({ type, id, extra }) => {
   const page = Math.floor((parseInt(extra.skip) || 0) / 24) + 1;
   try {
@@ -90,10 +82,6 @@ builder.defineCatalogHandler(async ({ type, id, extra }) => {
   }
 });
 
-// ---------------------------------------------------------------------------
-// Meta handler
-// ---------------------------------------------------------------------------
-
 builder.defineMetaHandler(async ({ type, id }) => {
   if (!id.startsWith('missav:')) return { meta: null };
   try {
@@ -106,10 +94,6 @@ builder.defineMetaHandler(async ({ type, id }) => {
     return { meta: null };
   }
 });
-
-// ---------------------------------------------------------------------------
-// Stream handler
-// ---------------------------------------------------------------------------
 
 builder.defineStreamHandler(async ({ type, id }) => {
   if (!id.startsWith('missav:')) return { streams: [] };
@@ -149,16 +133,11 @@ builder.defineStreamHandler(async ({ type, id }) => {
   }
 });
 
-// ---------------------------------------------------------------------------
-// Express app
-// ---------------------------------------------------------------------------
-
 const app = express();
 
 app.get('/health', (req, res) => res.send('ok'));
 app.get('/proxy', proxyHandler);
 
-// Mount Stremio addon router ở root — PHẢI ĐẶT CUỐI CÙNG
 app.use('/', getRouter(builder.getInterface()));
 
 app.listen(PORT, '0.0.0.0', () => {
