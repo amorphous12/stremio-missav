@@ -1,8 +1,8 @@
 'use strict';
 
-const axios = require('axios');
 const cheerio = require('cheerio');
 const NodeCache = require('node-cache');
+const { createSession } = require('wreq-js');
 
 const listCache = new NodeCache({ stdTTL: 600 });
 const detailCache = new NodeCache({ stdTTL: 300 });
@@ -11,37 +11,44 @@ const streamCache = new NodeCache({ stdTTL: 1800 });
 const BASE = 'https://missav.ws';
 const LANG = 'en';
 
-const HEADERS = {
-  'User-Agent':
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
-    '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-  Accept:
-    'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-  'Accept-Language': 'en-US,en;q=0.9',
-  Referer: BASE + '/',
-};
+let _sessionPromise = null;
 
-// ---------------------------------------------------------------------------
-// HTTP
-// ---------------------------------------------------------------------------
+async function getSession() {
+  if (_sessionPromise) return _sessionPromise;
+  _sessionPromise = createSession({
+    browser: 'chrome_142',
+    os: 'windows',
+  }).catch((e) => {
+    console.error('[MissAV] session create failed:', e.message);
+    _sessionPromise = null;
+    throw e;
+  });
+  return _sessionPromise;
+}
 
 async function fetchHtml(url) {
   try {
-    const res = await axios.get(url, {
-      headers: HEADERS,
-      timeout: 15000,
-      maxRedirects: 5,
+    const session = await getSession();
+    const res = await session.fetch(url, {
+      headers: {
+        Accept:
+          'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.9',
+        Referer: BASE + '/',
+      },
+      timeout: 20000,
     });
-    return res.data;
+
+    if (!res.ok) {
+      console.error('[MissAV] fetch error:', url, 'status', res.status);
+      return null;
+    }
+    return await res.text();
   } catch (e) {
     console.error('[MissAV] fetch error:', url, e.message);
     return null;
   }
 }
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
 
 function absUrl(href) {
   if (!href) return '';
@@ -55,10 +62,6 @@ function slugFromHref(href) {
   const clean = href.split('?')[0].replace(/\/+$/, '');
   return clean.split('/').pop() || '';
 }
-
-// ---------------------------------------------------------------------------
-// Eval unpacker (port từ Python _unbase + get_and_unpack)
-// ---------------------------------------------------------------------------
 
 const UNBASE_CHARS = '0123456789abcdefghijklmnopqrstuvwxyz';
 
@@ -89,17 +92,12 @@ function unpackEval(html) {
   });
 }
 
-// ---------------------------------------------------------------------------
-// List parsing
-// ---------------------------------------------------------------------------
-
 function parseList(html) {
   if (!html) return [];
   const $ = cheerio.load(html);
   const items = [];
   const seen = new Set();
 
-  // Thumbnail cards trên MissAV dùng class chứa "thumbnail" hoặc "group"
   $('div.thumbnail, div.group').each((_, el) => {
     const $el = $(el);
     const a = $el.find('a[href]').first();
@@ -109,8 +107,12 @@ function parseList(html) {
     if (!href.startsWith('http')) return;
     if (seen.has(href)) return;
 
-    // Bỏ qua link điều hướng
-    if (/\/(genres|actresses|makers|series|directors|labels|search|dm\d+)\//.test(href)) return;
+    if (
+      /\/(genres|actresses|makers|series|directors|labels|search|dm\d+)\//.test(
+        href
+      )
+    )
+      return;
 
     const slug = slugFromHref(href);
     if (!slug || slug.length < 4) return;
@@ -121,7 +123,6 @@ function parseList(html) {
       $el.find('img').first().attr('alt') ||
       slug.replace(/-/g, ' ').toUpperCase();
 
-    // Tag prefix
     if (/-uncensored-leak/.test(href)) title = '[Uncensored Leak] ' + title;
     if (/-english-subtitle/.test(href)) title = '[Eng Sub] ' + title;
 
@@ -140,10 +141,6 @@ function parseList(html) {
 
   return items;
 }
-
-// ---------------------------------------------------------------------------
-// Catalog
-// ---------------------------------------------------------------------------
 
 async function getNewest(page = 1) {
   const key = `newest_${page}`;
@@ -186,10 +183,6 @@ async function getByPath(path, page = 1) {
   if (r.length) listCache.set(key, r);
   return r;
 }
-
-// ---------------------------------------------------------------------------
-// Detail (không còn cố regex m3u8)
-// ---------------------------------------------------------------------------
 
 async function getDetail(slug) {
   const c = detailCache.get(slug);
@@ -234,18 +227,19 @@ async function getDetail(slug) {
   return data;
 }
 
-// ---------------------------------------------------------------------------
-// Stream resolution (thuần JS, dùng unpacker)
-// ---------------------------------------------------------------------------
-
 async function pickBestHls(masterUrl) {
   try {
-    const res = await axios.get(masterUrl, {
-      headers: { ...HEADERS, Referer: BASE + '/' },
-      timeout: 10000,
+    const session = await getSession();
+    const res = await session.fetch(masterUrl, {
+      headers: { Referer: BASE + '/' },
+      timeout: 15000,
     });
-    const lines = String(res.data).split('\n');
+    if (!res.ok) return null;
+
+    const text = await res.text();
+    const lines = text.split('\n');
     const variants = [];
+
     for (let i = 0; i < lines.length; i++) {
       if (lines[i].startsWith('#EXT-X-STREAM-INF')) {
         const bwMatch = lines[i].match(/BANDWIDTH=(\d+)/);
@@ -262,6 +256,7 @@ async function pickBestHls(masterUrl) {
         }
       }
     }
+
     if (variants.length) {
       variants.sort((a, b) => b[0] - a[0]);
       return variants[0][1];
@@ -284,19 +279,19 @@ async function resolveStream(slugOrUrl) {
   const html = await fetchHtml(url);
   if (!html) return null;
 
-  // Cách 1: unpacker
   let playlistUrl = '';
   const unpacked = unpackEval(html);
   if (unpacked) {
     const m = unpacked.match(/https:\/\/surrit\.com\/([a-f0-9-]{36})\//);
     if (m) playlistUrl = `https://surrit.com/${m[1]}/playlist.m3u8`;
     else {
-      const uuidM = unpacked.match(/([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})/);
+      const uuidM = unpacked.match(
+        /([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})/
+      );
       if (uuidM) playlistUrl = `https://surrit.com/${uuidM[1]}/playlist.m3u8`;
     }
   }
 
-  // Cách 2: tìm trực tiếp trong HTML
   if (!playlistUrl) {
     const m = html.match(
       /https:\/\/surrit\.com\/[a-f0-9-]{36}\/playlist\.m3u8/
@@ -314,10 +309,6 @@ async function resolveStream(slugOrUrl) {
   streamCache.set(key, result);
   return result;
 }
-
-// ---------------------------------------------------------------------------
-// Meta
-// ---------------------------------------------------------------------------
 
 function toMeta(item) {
   return {
